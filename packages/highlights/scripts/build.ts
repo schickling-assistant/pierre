@@ -235,6 +235,7 @@ export function transformWat(
     '$hlJava',
     '$hlJsonImpl',
     '$hlJulia',
+    '$hlKdl',
     '$hlKotlin',
     '$hlLatex',
     '$hlLisp',

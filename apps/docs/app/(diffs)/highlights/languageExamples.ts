@@ -1010,6 +1010,29 @@ end
 end # module`,
   ],
   [
+    'kdl',
+    'KDL',
+    `// Nodes have arguments, properties, and children
+(app)service "highlights" enabled=#true replicas=(u32)3 {
+    listen host="127.0.0.1" port=8080
+    limits memory=1.5e3 timeout=#null
+    path #"C:\\data\\highlights"#
+    description """
+        Highlight code with KDL v2.
+        Keep multiline strings readable.
+        """
+
+    /* Block comments /* can nest */ like nodes. */
+    /- experimental enabled=#false {
+        feature "preview"
+    }
+    output format="html" /-color="legacy" theme="pierre-dark"
+}
+
+// KDL v1 literals and raw strings are also supported
+legacy active=true fallback=null path=r#"C:\\data\\legacy"#`,
+  ],
+  [
     'kotlin',
     'Kotlin',
     `data class Point(val x: Int, val y: Int)

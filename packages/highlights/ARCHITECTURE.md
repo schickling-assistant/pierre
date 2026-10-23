@@ -98,6 +98,10 @@ tokens. `jsx.wat` handles markup, and `tsx.wat` is the driver. Feature flags
 select JS, TS, JSX, and TSRX behavior. `sig.wat` tracks parameter lists for
 lexers that use parameter context.
 
+KDL uses `kdl.wat` for v2 syntax and v1 compatibility, including raw and triple
+strings, nested block comments, slashdash comments, and type annotations. Node
+names are `tag`, property names are `attribute`, and annotations are `type`.
+
 A lexer reads `[$ptr, $end)` and leaves `$ptr` at the boundary. Each lexer must
 obey these rules:
 

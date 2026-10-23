@@ -820,6 +820,35 @@ export const samples: Record<string, LangSample> = {
       'attribute',
     ],
   },
+  kdl: {
+    code: lines(
+      '// KDL v2 configuration with v1-compatible values',
+      '(application)service name="λ😀 <>&" enabled=#true missing=#null {',
+      '  port (u16)8080',
+      '  values -42 +1_000 1.25e-3 0xCA_FE 0o755 0b1010',
+      '  limits #inf #-inf #nan',
+      '  message """',
+      '    first line',
+      '    second line',
+      '    """',
+      '  raw ##"literal "quote" and \\n"##',
+      '  /* outer /* nested */ comment */',
+      '  /- disabled flag=#false { child "ignored"; }',
+      '  entries /- (hidden)"skip" keep="visible" /- gone=42',
+      '}',
+      'legacy true false null r#"raw v1"#'
+    ),
+    kinds: [
+      'comment',
+      'type',
+      'tag',
+      'attribute',
+      'string',
+      'boolean',
+      'constant.builtin',
+      'number',
+    ],
+  },
   csv: {
     code: lines(
       'id,name,price,stock,"notes, quoted"',
@@ -4098,6 +4127,7 @@ export const tokenizerSamples: [Lang, string][] = [
   ['gdscript', samples.gdscript.code],
   ['gdshader', samples.gdshader.code],
   ['gdresource', samples.gdresource.code],
+  ['kdl', samples.kdl.code],
   ['plain', 'one\ntwo\n'],
   ['batch', samples.batch.code],
   ['elm', samples.elm.code],
