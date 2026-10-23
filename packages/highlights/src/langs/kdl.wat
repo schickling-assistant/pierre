@@ -27,30 +27,139 @@
           (then (return (enum.get $Token.constant.builtin))))))
     (enum.get $Token.string))
 
-  ;; KDL identifiers end at whitespace or structural punctuation, not at the
-  ;; ASCII identifier boundary: names may contain hyphens and Unicode.
-  (func $kdlBoundary (param $c i32) (result i32)
+  ;; Return the byte width of a KDL newline, treating CRLF as one sequence.
+  ;; Byte-wise lookahead keeps incomplete UTF-8 and embedded ranges bounded.
+  (func $kdlNewlineWidth (param $p i32) (result i32)
+    (local $c i32)
+    (local.set $c (call $templateByte (local.get $p)))
+    (if (i32.and (i32.ge_u (local.get $c) (i32.const 10)) (i32.le_u (local.get $c) (i32.const 13)))
+      (then
+        (return (select (i32.const 2) (i32.const 1)
+          (i32.and (i32.eq (local.get $c) (i32.const 13))
+            (i32.eq (call $templateByte (i32.add (local.get $p) (i32.const 1))) (i32.const 10)))))))
+    (if (i32.and (i32.eq (local.get $c) (i32.const 0xc2))
+          (i32.eq (call $templateByte (i32.add (local.get $p) (i32.const 1))) (i32.const 0x85)))
+      (then (return (i32.const 2))))
+    (if (i32.and (i32.eq (local.get $c) (i32.const 0xe2))
+          (i32.and
+            (i32.eq (call $templateByte (i32.add (local.get $p) (i32.const 1))) (i32.const 0x80))
+            (i32.le_u (i32.sub (call $templateByte (i32.add (local.get $p) (i32.const 2))) (i32.const 0xa8)) (i32.const 1))))
+      (then (return (i32.const 3))))
+    (i32.const 0))
+
+  ;; The non-newline White_Space code points in KDL 2 section 3.17.
+  (func $kdlSpaceWidth (param $p i32) (result i32)
+    (local $c i32)
+    (local $b i32)
+    (local $d i32)
+    (local.set $c (call $templateByte (local.get $p)))
+    (if (i32.or (i32.eq (local.get $c) (i32.const 9)) (i32.eq (local.get $c) (i32.const 32)))
+      (then (return (i32.const 1))))
+    (if (i32.lt_u (local.get $c) (i32.const 0xc2)) (then (return (i32.const 0))))
+    (local.set $b (call $templateByte (i32.add (local.get $p) (i32.const 1))))
+    (if (i32.and (i32.eq (local.get $c) (i32.const 0xc2)) (i32.eq (local.get $b) (i32.const 0xa0)))
+      (then (return (i32.const 2))))
+    (local.set $d (call $templateByte (i32.add (local.get $p) (i32.const 2))))
+    (if (i32.or
+          (i32.and (i32.eq (local.get $c) (i32.const 0xe1))
+            (i32.and (i32.eq (local.get $b) (i32.const 0x9a)) (i32.eq (local.get $d) (i32.const 0x80))))
+          (i32.or
+            (i32.and (i32.eq (local.get $c) (i32.const 0xe2))
+              (i32.or
+                (i32.and (i32.eq (local.get $b) (i32.const 0x80))
+                  (i32.or (i32.le_u (i32.sub (local.get $d) (i32.const 0x80)) (i32.const 10))
+                    (i32.eq (local.get $d) (i32.const 0xaf))))
+                (i32.and (i32.eq (local.get $b) (i32.const 0x81)) (i32.eq (local.get $d) (i32.const 0x9f)))))
+            (i32.and (i32.eq (local.get $c) (i32.const 0xe3))
+              (i32.and (i32.eq (local.get $b) (i32.const 0x80)) (i32.eq (local.get $d) (i32.const 0x80))))))
+      (then (return (i32.const 3))))
+    (i32.const 0))
+
+  ;; Names may contain hyphens and Unicode, but backslash starts a continuation.
+  (func $kdlBoundary (param $p i32) (result i32)
+    (local $c i32)
+    (local.set $c (call $templateByte (local.get $p)))
     (i32.or
-      (i32.le_u (local.get $c) (i32.const 32))
+      (i32.or (call $kdlSpaceWidth (local.get $p)) (call $kdlNewlineWidth (local.get $p)))
       (i32.or
         (i32.or (i32.eq (local.get $c) (i32.const "{")) (i32.eq (local.get $c) (i32.const "}")))
         (i32.or
           (i32.or (i32.eq (local.get $c) (i32.const "(")) (i32.eq (local.get $c) (i32.const ")")))
           (i32.or
             (i32.or (i32.eq (local.get $c) (i32.const ";")) (i32.eq (local.get $c) (i32.const "=")))
-            (i32.or (i32.eq (local.get $c) (i32.const 34)) (i32.eq (local.get $c) (i32.const "/"))))))))
+            (i32.or (i32.eq (local.get $c) (i32.const 92))
+              (i32.or (i32.eq (local.get $c) (i32.const 34)) (i32.eq (local.get $c) (i32.const "/")))))))))
 
-  ;; Look ahead without consuming a separator. Newlines are node terminators.
+  ;; Non-consuming nested-comment lookahead for property-key classification.
+  (func $kdlCommentEnd (param $p i32) (result i32)
+    (local $depth i32)
+    (local $c i32)
+    (local.set $depth (i32.const 1))
+    (local.set $p (i32.add (local.get $p) (i32.const 2)))
+    (block $done
+      (loop $comment
+        (br_if $done (i32.ge_u (local.get $p) (global.get $end)))
+        (local.set $c (call $templateByte (local.get $p)))
+        (if (i32.and (i32.eq (local.get $c) (i32.const "/"))
+              (i32.eq (call $templateByte (i32.add (local.get $p) (i32.const 1))) (i32.const "*")))
+          (then
+            (local.set $depth (i32.add (local.get $depth) (i32.const 1)))
+            (local.set $p (i32.add (local.get $p) (i32.const 2)))
+            (br $comment)))
+        (if (i32.and (i32.eq (local.get $c) (i32.const "*"))
+              (i32.eq (call $templateByte (i32.add (local.get $p) (i32.const 1))) (i32.const "/")))
+          (then
+            (local.set $depth (i32.sub (local.get $depth) (i32.const 1)))
+            (local.set $p (i32.add (local.get $p) (i32.const 2)))
+            (br_if $done (i32.eqz (local.get $depth)))
+            (br $comment)))
+        (local.set $p (i32.add (local.get $p) (i32.const 1)))
+        (br $comment)))
+    (local.get $p))
+
+  ;; A line comment stops at any KDL newline, not only ASCII LF or CR.
+  (func $kdlLineEnd (param $p i32) (result i32)
+    (block $done
+      (loop $line
+        (br_if $done (i32.ge_u (local.get $p) (global.get $end)))
+        (br_if $done (call $kdlNewlineWidth (local.get $p)))
+        (local.set $p (i32.add (local.get $p) (i32.const 1)))
+        (br $line)))
+    (local.get $p))
+
+  ;; Skip node-space, including nested comments and escaped newlines, without
+  ;; changing the scanner cursor or allowing an unescaped newline through.
   (func $kdlAfterSpace (param $p i32) (result i32)
+    (local $width i32)
+    (local $escaped i32)
+    (local $c i32)
     (block $done
       (loop $space
         (br_if $done (i32.ge_u (local.get $p) (global.get $end)))
-        (br_if $done
-          (i32.eqz (i32.or
-            (i32.eq (i32.load8_u (local.get $p)) (i32.const 32))
-            (i32.eq (i32.load8_u (local.get $p)) (i32.const 9)))))
-        (local.set $p (i32.add (local.get $p) (i32.const 1)))
-        (br $space)))
+        (local.set $width (call $kdlSpaceWidth (local.get $p)))
+        (if (local.get $width)
+          (then (local.set $p (i32.add (local.get $p) (local.get $width))) (br $space)))
+        (local.set $c (call $templateByte (local.get $p)))
+        (if (i32.and (i32.eq (local.get $c) (i32.const "/"))
+              (i32.eq (call $templateByte (i32.add (local.get $p) (i32.const 1))) (i32.const "*")))
+          (then (local.set $p (call $kdlCommentEnd (local.get $p))) (br $space)))
+        (if (i32.eq (local.get $c) (i32.const 92))
+          (then
+            (local.set $escaped (i32.const 1))
+            (local.set $p (i32.add (local.get $p) (i32.const 1)))
+            (br $space)))
+        (if (local.get $escaped)
+          (then
+            (if (i32.and (i32.eq (local.get $c) (i32.const "/"))
+                  (i32.eq (call $templateByte (i32.add (local.get $p) (i32.const 1))) (i32.const "/")))
+              (then (local.set $p (call $kdlLineEnd (local.get $p)))))
+            (local.set $width (call $kdlNewlineWidth (local.get $p)))
+            (if (local.get $width)
+              (then
+                (local.set $p (i32.add (local.get $p) (local.get $width)))
+                (local.set $escaped (i32.const 0))
+                (br $space)))))
+        (br $done)))
     (local.get $p))
 
   ;; Return the end of a matching single/triple quote plus raw-string hashes,
@@ -128,19 +237,18 @@
               (if (local.get $close) (then (local.set $quotes (i32.const 0))))
               (br $atom)))
 
-          (if (i32.le_u (local.get $c) (i32.const 32))
+          (local.set $p (call $kdlNewlineWidth (global.get $ptr)))
+          (local.set $close (select (local.get $p) (call $kdlSpaceWidth (global.get $ptr)) (local.get $p)))
+          (if (local.get $close)
             (then
-              (global.set $ptr (i32.add (global.get $ptr) (i32.const 1)))
-              (if (i32.or (i32.eq (local.get $c) (i32.const 10)) (i32.eq (local.get $c) (i32.const 13)))
+              (global.set $ptr (i32.add (global.get $ptr) (local.get $close)))
+              (if (local.get $p)
                 (then
                   (if (i32.eqz (local.get $continued))
                     (then
                       (local.set $inNode (i32.const 0))
                       (if (i32.and (i32.eq (local.get $mute) (i32.const 2)) (i32.eqz (local.get $muteDepth)))
                         (then (local.set $mute (i32.const 0))))))
-                  ;; A CRLF is one terminator, including after a continuation.
-                  (if (i32.and (i32.eq (local.get $c) (i32.const 13)) (i32.eq (call $templateByte (global.get $ptr)) (i32.const 10)))
-                    (then (global.set $ptr (i32.add (global.get $ptr) (i32.const 1)))))
                   (local.set $continued (i32.const 0))))
               (if (local.get $mute)
                 (then (call $emitTok (enum.get $Token.comment) (local.get $lhs) (global.get $ptr)))
@@ -151,7 +259,10 @@
             (then
               (local.set $p (call $templateByte (i32.add (global.get $ptr) (i32.const 1))))
               (if (i32.eq (local.get $p) (i32.const "/"))
-                (then (call $lexLineComment (i32.const 2) (enum.get $Token.comment)) (br $next)))
+                (then
+                  (global.set $ptr (call $kdlLineEnd (i32.add (global.get $ptr) (i32.const 2))))
+                  (call $emitTok (enum.get $Token.comment) (local.get $lhs) (global.get $ptr))
+                  (br $next)))
               (if (i32.eq (local.get $p) (i32.const "*"))
                 (then (call $lexNestedBlockComment (i32.const 0x2a2f) (i32.const 0x2f2a) (enum.get $Token.comment)) (br $next)))
               (if (i32.eq (local.get $p) (i32.const "-"))
@@ -245,7 +356,7 @@
           (block $wordDone
             (loop $word
               (br_if $wordDone (i32.ge_u (global.get $ptr) (global.get $end)))
-              (br_if $wordDone (call $kdlBoundary (i32.load8_u (global.get $ptr))))
+              (br_if $wordDone (call $kdlBoundary (global.get $ptr)))
               (global.set $ptr (i32.add (global.get $ptr) (i32.const 1)))
               (br $word)))
           (local.set $tok (enum.get $Token.string))

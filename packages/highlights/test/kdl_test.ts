@@ -301,6 +301,112 @@ void t.test('kdl: line continuations retain the node entry context', () => {
 });
 
 void t.test(
+  'kdl: property lookahead skips nested comments and continuations',
+  () => {
+    for (const separator of [
+      ' /* comment */ ',
+      ' /* outer /* nested */ tail */ ',
+      ' /* outer\n /* nested */ tail */ ',
+      '\\\n  ',
+      '\\ /* outer /* nested */ tail */ // continuation\r\n  ',
+      '\\\u0085 ',
+      '\\\u2028 ',
+    ]) {
+      for (const key of ['key', '"quoted key"', '#"raw key"#']) {
+        const code = `node ${key}${separator}=42 live=#true\n`;
+        checkInvariants(kdl.hl, code);
+        assertKind(code, key, 'attribute');
+        assertKind(code, '42', 'number');
+        assertKind(code, 'live', 'attribute');
+        assertKind(code, '#true', 'boolean');
+        const suppressed = `/- ${key}${separator}=42`;
+        const muted = `node ${suppressed} live=#true\n`;
+        checkInvariants(kdl.hl, muted);
+        assertKind(muted, suppressed, 'comment');
+        assertKind(muted, 'live', 'attribute');
+        assertKind(muted, '#true', 'boolean');
+      }
+    }
+    const code = 'node key /* outer /* nested */ tail */ =42\n';
+    assertLineFedParity('kdl', code);
+    assertLineFedParity('kdl', 'node /- key /* c */ =42 live=#true\n');
+  }
+);
+
+void t.test(
+  'kdl: tight continuations stop words without ending their node',
+  () => {
+    for (const newline of [
+      '\n',
+      '\r\n',
+      '\r',
+      '\u000b',
+      '\u000c',
+      '\u0085',
+      '\u2028',
+      '\u2029',
+    ]) {
+      const code = `node #true\\${newline}  value\nnext\n`;
+      checkInvariants(kdl.hl, code);
+      assertKind(code, '#true', 'boolean');
+      assertKind(code, 'value', 'string');
+      assertKind(code, 'next', 'tag');
+      assertLineFedParity('kdl', code);
+    }
+  }
+);
+
+void t.test(
+  'kdl: every Unicode space separates words and property equals',
+  () => {
+    const spaces = [
+      '\t',
+      ' ',
+      '\u00a0',
+      '\u1680',
+      ...Array.from({ length: 11 }, (_, i) => String.fromCodePoint(0x2000 + i)),
+      '\u202f',
+      '\u205f',
+      '\u3000',
+    ];
+    for (const space of spaces) {
+      const code = `node${space}#true${space}key${space}=42\n`;
+      checkInvariants(kdl.hl, code);
+      assertKind(code, 'node', 'tag');
+      assertKind(code, '#true', 'boolean');
+      assertKind(code, 'key', 'attribute');
+      assertKind(code, '42', 'number');
+      assertLineFedParity('kdl', code);
+    }
+  }
+);
+
+void t.test(
+  'kdl: every newline ends nodes, line comments and slashdash nodes',
+  () => {
+    for (const newline of [
+      '\n',
+      '\r\n',
+      '\r',
+      '\u000b',
+      '\u000c',
+      '\u0085',
+      '\u2028',
+      '\u2029',
+    ]) {
+      for (const first of ['first', '// first', '/- first']) {
+        const code = `${first}${newline}second #true\n`;
+        checkInvariants(kdl.hl, code);
+        assertKind(code, 'first', first === 'first' ? 'tag' : 'comment');
+        assertKind(code, 'second', 'tag');
+        assertKind(code, '#true', 'boolean');
+        assertLineFedParity('kdl', code);
+      }
+    }
+  }
+);
+
+void t.test(
   'kdl: Unicode names, HTML specials and all source bytes stay lossless',
   () => {
     const code = '日本語 λ😀 clé="<tag>&amp; > 😀" { 子 "é"; }\n';
